@@ -1,4 +1,4 @@
-from flask import Flask, request, Response
+from flask import Flask, request, Response, abort, render_template_string
 import argparse
 import re
 import random
@@ -52,32 +52,24 @@ def encrypt_flag(flag):
 def decrypt_flag(encrypted_flag):
     flags_dict = load_flags()
     
-    for flag_data in flags_dict.values():
+    for flag, flag_data in flags_dict.items():
         if flag_data['encrypted'] == encrypted_flag:
-            key = flag_data['key']
-            encrypted_bytes = bytes.fromhex(encrypted_flag)
-            decrypted = ''.join(chr(b ^ ord(key[i % len(key)])) for i, b in enumerate(encrypted_bytes))
-            print("\033[1;32m" + f"[!] Flag decrypted: {decrypted}" + "\033[0m")
-            return decrypted
+            print("\033[1;33m" + f"[!] Flag decrypted: {flag}" + "\033[0m")
+            return flag
     
     return encrypted_flag
 
-@app.route('/', defaults={'path': ''}, methods=['GET', 'POST', 'PUT', 'DELETE', 'HEAD', 'OPTIONS', 'PATCH'])
-@app.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE', 'HEAD', 'OPTIONS', 'PATCH'])
-def proxy(path):
-    target_ip = app.config['TARGET_IP']
-    port = app.config['PORT']
-
+def encrypt_body(request):
     headers = dict(request.headers)
     body = request.get_data().decode('utf-8', errors='ignore')
-    
+
     try:
         decoded_body = unquote(body)
     except:
         decoded_body = body
-    
+            
     flag_pattern = r'[A-Z0-9]{31}='
-    
+            
     for header, value in headers.items():
         decoded_value = unquote(str(value))
         for check_value in [str(value), decoded_value]:
@@ -85,23 +77,15 @@ def proxy(path):
             for flag in flags:
                 encrypted = encrypt_flag(flag)
                 headers[header] = headers[header].replace(flag, encrypted)
-    
+            
     flags = re.findall(flag_pattern, decoded_body)
     for flag in flags:
         encrypted = encrypt_flag(flag)
         decoded_body = decoded_body.replace(flag, encrypted)
 
-    url = f'http://{target_ip}:{port}/{path}'
-    print(url)
-    response = requests.request(
-        method=request.method,
-        url=url,
-        headers=headers,
-        data=decoded_body.encode() if decoded_body else None,
-        allow_redirects=False,
-        stream=True
-    )
-    
+    return headers, decoded_body
+
+def decrypt_response(response):
     response_content = response.content.decode('utf-8', errors='ignore')
 
     flags_dict = load_flags()
@@ -112,9 +96,54 @@ def proxy(path):
                 encrypted_flag,
                 decrypt_flag(encrypted_flag)
             )
+
+    response_headers = dict(response.headers)
+    for header, value in response_headers.items():
+        for flag_data in flags_dict.values():
+            encrypted_flag = flag_data['encrypted']
+            if encrypted_flag in str(value):
+                response_headers[header] = str(value).replace(
+                    encrypted_flag,
+                    decrypt_flag(encrypted_flag)
+                )
+    return response_headers, response_content
+    
+@app.route('/', defaults={'path': ''}, methods=['GET', 'POST', 'PUT', 'DELETE', 'HEAD', 'OPTIONS', 'PATCH'])
+@app.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE', 'HEAD', 'OPTIONS', 'PATCH'])
+def proxy(path):
+    target_ip = app.config['TARGET_IP']
+    port = app.config['PORT']
+    
+    is_allowed = True
+    if app.config.get('ALLOWED_IP'):
+        client_ip = request.remote_addr
+        is_allowed = client_ip == app.config['ALLOWED_IP']
+
+    if is_allowed:
+        headers, body = encrypt_body(request)
+    else:
+        headers = request.headers
+        body = request.get_data().decode('utf-8', errors='ignore')
+
+    url = f'http://{target_ip}:{port}/{path}'
+    print(url)
+    response = requests.request(
+        method=request.method,
+        url=url,
+        headers=headers,
+        data=body.encode() if body else None,
+        allow_redirects=False,
+        stream=True
+    )
+
+    if is_allowed:
+        response_headers, response_content = decrypt_response(response)
+    else:
+        response_headers = response.headers
+        response_content = response.content.decode('utf-8', errors='ignore')
     
     excluded_headers = ['content-encoding', 'content-length', 'transfer-encoding', 'connection']
-    headers = [(name, value) for (name, value) in response.raw.headers.items()
+    headers = [(name, value) for (name, value) in response_headers.items()
               if name.lower() not in excluded_headers]
     
     return Response(
@@ -127,10 +156,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('port', type=int, help='Port to listen on')
     parser.add_argument('target_ip', help='Target IP to forward requests to')
+    parser.add_argument('--allowed-ip', help='IP address allowed to access the proxy')
     args = parser.parse_args()
     
     app.config['TARGET_IP'] = args.target_ip
     app.config['PORT'] = args.port
+    app.config['ALLOWED_IP'] = args.allowed_ip
 
     print(f"Starting proxy server on port {args.port}")
     print(f"Forwarding requests to {args.target_ip}:{args.port}")
