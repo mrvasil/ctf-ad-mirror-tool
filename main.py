@@ -7,6 +7,8 @@ import requests
 from urllib.parse import unquote
 import csv
 import os
+from dotenv import load_dotenv
+import ast
 
 app = Flask(__name__, static_folder=None)
 
@@ -114,16 +116,17 @@ def proxy(path):
     target_ip = app.config['TARGET_IP']
     port = app.config['PORT']
     
-    is_allowed = True
-    if app.config.get('ALLOWED_IP'):
-        client_ip = request.remote_addr
-        is_allowed = client_ip == app.config['ALLOWED_IP']
-
-    if is_allowed:
+    client_ip = request.remote_addr
+    allowed_ips = app.config.get('ALLOWED_IPS', [])
+    access_enabled = app.config.get('ACCESS_ENABLED', False)
+    
+    if client_ip in allowed_ips:
         headers, body = encrypt_body(request)
-    else:
+    elif access_enabled:
         headers = request.headers
         body = request.get_data().decode('utf-8', errors='ignore')
+    else:
+        return '<!DOCTYPE html><html><head><style>.loader{border:16px solid #f3f3f3;border-radius:50%;border-top:16px solid #3498db;width:120px;height:120px;animation:spin 2s linear infinite;position:fixed;top:50%;left:50%;margin-top:-60px;margin-left:-60px}@keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}</style></head><body><div class="loader"></div></body></html>', 403
 
     url = f'http://{target_ip}:{port}/{path}'
     print(url)
@@ -136,7 +139,7 @@ def proxy(path):
         stream=True
     )
 
-    if is_allowed:
+    if client_ip in allowed_ips:
         response_headers, response_content = decrypt_response(response)
     else:
         response_headers = response.headers
@@ -156,15 +159,27 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('port', type=int, help='Port to listen on')
     parser.add_argument('target_ip', help='Target IP to forward requests to')
-    parser.add_argument('--allowed-ip', help='IP address allowed to access the proxy')
+    parser.add_argument('--allowed-ips', type=str, help='List of allowed IPs')
+    parser.add_argument('--access', type=str, default='true', help='Enable public access')
     args = parser.parse_args()
+    
+    try:
+        allowed_ips = ast.literal_eval(args.allowed_ips)
+    except:
+        print("Error parsing allowed_ips, using empty list")
+        allowed_ips = []
+    
+    access_enabled = str(args.access).lower() == 'true'
     
     app.config['TARGET_IP'] = args.target_ip
     app.config['PORT'] = args.port
-    app.config['ALLOWED_IP'] = args.allowed_ip
+    app.config['ALLOWED_IPS'] = allowed_ips
+    app.config['ACCESS_ENABLED'] = access_enabled
 
-    print(f"Starting proxy server on port {args.port}")
-    print(f"Forwarding requests to {args.target_ip}:{args.port}")
+    print(f"Starting proxy server on port {app.config['PORT']}")
+    print(f"Forwarding requests to {app.config['TARGET_IP']}:{app.config['PORT']}")
+    print(f"Allowed IPs: {app.config['ALLOWED_IPS']}")
+    print(f"Public access enabled: {app.config['ACCESS_ENABLED']}")
     
     app.run(host='0.0.0.0', port=args.port)
 
