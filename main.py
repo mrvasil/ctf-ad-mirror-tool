@@ -36,6 +36,21 @@ def save_flag(flag, key, encrypted):
             'encrypted': encrypted
         })
 
+def is_file_or_image(content_type):
+    if not content_type:
+        return False
+    file_types = [
+        'image/',
+        'audio/',
+        'video/',
+        'application/pdf',
+        'application/msword',
+        'application/vnd.ms-excel',
+        'application/zip',
+        'application/x-rar-compressed'
+    ]
+    return any(content_type.lower().startswith(ft) for ft in file_types)
+
 def encrypt_flag(flag):
     flags_dict = load_flags()
     if flag in flags_dict:
@@ -64,6 +79,10 @@ def decrypt_flag(encrypted_flag):
 def encrypt_body(request):
     headers = dict(request.headers)
     body = request.get_data().decode('utf-8', errors='ignore')
+    content_type = headers.get('Content-Type', '')
+
+    if is_file_or_image(content_type):
+        return headers, request.get_data()
 
     try:
         decoded_body = unquote(body)
@@ -84,11 +103,14 @@ def encrypt_body(request):
     for flag in flags:
         encrypted = encrypt_flag(flag)
         decoded_body = decoded_body.replace(flag, encrypted)
-
+    print("asd")
     return headers, decoded_body
 
 def decrypt_response(response):
     response_content = response.content.decode('utf-8', errors='ignore')
+    content_type = response.headers.get('Content-Type', '')
+    if is_file_or_image(content_type):
+        return dict(response.headers), response.content
 
     flags_dict = load_flags()
     for flag_data in flags_dict.values():
@@ -120,11 +142,11 @@ def proxy(path):
     allowed_ips = app.config.get('ALLOWED_IPS', [])
     access_enabled = app.config.get('ACCESS_ENABLED', False)
     
-    if client_ip in allowed_ips:
+    if (client_ip in allowed_ips) or ((allowed_ips == []) and (access_enabled)):
         headers, body = encrypt_body(request)
     elif access_enabled:
         headers = request.headers
-        body = request.get_data().decode('utf-8', errors='ignore')
+        body = request.get_data()
     else:
         return '<!DOCTYPE html><html><head><style>.loader{border:16px solid #f3f3f3;border-radius:50%;border-top:16px solid #3498db;width:120px;height:120px;animation:spin 2s linear infinite;position:fixed;top:50%;left:50%;margin-top:-60px;margin-left:-60px}@keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}</style></head><body><div class="loader"></div></body></html>', 403
 
@@ -139,11 +161,11 @@ def proxy(path):
         stream=True
     )
 
-    if client_ip in allowed_ips:
+    if (client_ip in allowed_ips) or ((allowed_ips == []) and (access_enabled)):
         response_headers, response_content = decrypt_response(response)
     else:
         response_headers = response.headers
-        response_content = response.content.decode('utf-8', errors='ignore')
+        response_content = response.content
     
     excluded_headers = ['content-encoding', 'content-length', 'transfer-encoding', 'connection']
     headers = [(name, value) for (name, value) in response_headers.items()
@@ -185,3 +207,11 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+# - шифрование при [] и True
+# - декидирование и файлы
+#запуск с другого порта
+#цвета анимации загрузки
+#websocket
+#blacklist

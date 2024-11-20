@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 import ast
 import signal
 import time
+from datetime import datetime
 
 def load_config():
     load_dotenv()
@@ -38,10 +39,16 @@ def load_config():
 
 def start_proxies(config):
     processes = []
-    print(f"Allowed IPs: \033[1;33m{config["allowed_ips"]}\033[0m")
+    os.makedirs('logs', exist_ok=True)
+    
+    print(f"Allowed IPs: \033[1;33m{config['allowed_ips']}\033[0m")
     print(f"Public access enabled: \033[1;{'32' if config['access_enabled'] else '31'}m{config['access_enabled']}\033[0m")
 
     for task in config['tasks']:
+        log_file = open(f"logs/{task['name']}.log", 'a')
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        log_file.write(f"\n=== Started at {timestamp} ===\n")
+        
         cmd = [
             'python3',
             'main.py',
@@ -53,13 +60,14 @@ def start_proxies(config):
         
         process = subprocess.Popen(
             cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
+            stdout=log_file,
+            stderr=log_file
         )
         processes.append({
             'name': task['name'],
             'process': process,
-            'config': task
+            'config': task,
+            'log_file': log_file
         })
         print(f"Started \033[1;32m{task['name']}\033[0m proxy on port \033[1;33m{task['port']}\033[0m -> \033[1;33m{task['forward_ip']}\033[0m")
 
@@ -71,6 +79,8 @@ def monitor_processes(processes, config):
             for p in processes:
                 if p['process'].poll() is not None:
                     print(f"Process {p['name']} died, restarting...")
+                    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    p['log_file'].write(f"\n=== Restarted at {timestamp} ===\n")
                     cmd = [
                         'python3',
                         'main.py',
@@ -81,8 +91,8 @@ def monitor_processes(processes, config):
                     ]
                     p['process'] = subprocess.Popen(
                         cmd,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE
+                        stdout=p['log_file'],
+                        stderr=p['log_file']
                     )
             time.sleep(5)
     except KeyboardInterrupt:
@@ -90,6 +100,7 @@ def monitor_processes(processes, config):
         for p in processes:
             p['process'].send_signal(signal.SIGTERM)
             p['process'].wait()
+            p['log_file'].close()
 
 def main():
     config = load_config()
